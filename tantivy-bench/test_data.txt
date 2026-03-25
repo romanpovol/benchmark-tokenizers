@@ -1,0 +1,5 @@
+/electronics/tv_and_video/led_tv
+/books/fiction/sci-fi
+/books/nonfic/science
+/home/kitchen/appliances
+/one/two/three

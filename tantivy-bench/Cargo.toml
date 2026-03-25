@@ -1,0 +1,9 @@
+[package]
+name = "tantivy-bench"
+version = "0.1.0"
+description = "Benchmarks for Tantivy regex and facet tokenizers"
+
+[dependencies]
+tantivy = "0.25"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
