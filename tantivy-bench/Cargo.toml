@@ -1,6 +1,7 @@
 [package]
 name = "tantivy-bench"
 version = "0.1.0"
+edition = "2024"
 description = "Benchmarks for Tantivy regex and facet tokenizers"
 
 [dependencies]

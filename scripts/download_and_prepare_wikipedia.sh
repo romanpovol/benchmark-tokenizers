@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${1:-${ROOT}/data/wiki_work}"
 mkdir -p "${WORK}"
 
-# Default: Simple English Wikipedia — much smaller than enwiki (~100–300 MB bz2 vs many GB).
+# Default: Simple English Wikipedia - much smaller than enwiki (~100–300 MB bz2 vs many GB).
 # Override: WIKI_DUMP_URL='https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles-multistream1.xml-p1p41242.bz2'
 : "${WIKI_DUMP_URL:=https://dumps.wikimedia.org/simplewiki/latest/simplewiki-latest-pages-articles.xml.bz2}"
 

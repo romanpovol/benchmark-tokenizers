@@ -1,7 +1,3 @@
-//! Бенчмарк Tantivy в том же духе, что и Lucene `LuceneTokenizerPerf` / `TestAnalyzerPerf`:
-//! строки из файла, на каждой строке только потребление токен-потока (`advance()` + атрибуты токена),
-//! без построения индекса. Перцентили по времени полного прохода; память — снаружи (`/usr/bin/time -v`).
-
 use clap::{Parser, ValueEnum};
 use regex::Regex;
 use std::fs::File;
@@ -43,9 +39,13 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_WARMUP)]
     warmup: u32,
 
-    /// Измерять `RegexTokenizer::token_stream` как в Tantivy (на каждую строку клонируется `Regex` внутри API — очень медленно; только для профилирования накладных расходов)
+    // Measure `RegexTokenizer::token_stream` as Tantivy calls it (clones `Regex` per line internally its very slow; use only for profiling)
     #[arg(long, default_value_t = false)]
     per_line_regex_clone: bool,
+
+    // Print every token to stdout and exit, skipping benchmark
+    #[arg(long, default_value_t = false)]
+    dump: bool,
 }
 
 fn load_lines(path: &PathBuf) -> Vec<String> {
@@ -62,80 +62,73 @@ fn load_lines(path: &PathBuf) -> Vec<String> {
     lines
 }
 
-fn term_hash_bytes(text: &str) -> i64 {
-    let mut h: i64 = 0;
+fn canonical_hash_token(h: &mut i64, text: &str) {
     for b in text.bytes() {
-        h = h.wrapping_mul(31).wrapping_add(b as i64);
+        *h = h.wrapping_mul(31).wrapping_add(b as i64);
     }
-    h
 }
 
-fn hash_token(t: &tantivy::tokenizer::Token) -> i64 {
-    hash_token_parts(
-        t.text.as_str(),
-        t.position,
-        t.position_length,
-        t.offset_from,
-        t.offset_to,
-    )
+// Hash a FacetTokenizer token without allocating:
+// prepend '/' and replace '\x00' separators with '/' on the fly
+fn canonical_hash_facet_token(h: &mut i64, raw: &str) {
+    *h = h.wrapping_mul(31).wrapping_add(b'/' as i64);
+    for b in raw.bytes() {
+        let mapped = if b == b'\x00' { b'/' } else { b };
+        *h = h.wrapping_mul(31).wrapping_add(mapped as i64);
+    }
 }
 
-fn hash_token_parts(
-    text: &str,
-    position: usize,
-    position_length: usize,
-    offset_from: usize,
-    offset_to: usize,
-) -> i64 {
+// One compiled `Regex` per run, comparable to Lucene (single PatternTokenizer instance)
+fn process_lines_regex_shared(re: &Regex, lines: &[String]) -> (i64, u64) {
     let mut h: i64 = 0;
-    h += term_hash_bytes(text);
-    h += 31 * position as i64;
-    h += 31 * position_length as i64;
-    h += 31 * offset_from as i64;
-    h += 31 * offset_to as i64;
-    h
-}
-
-/// Один скомпилированный `Regex` на весь прогон — сопоставимо с Lucene (один `PatternTokenizer`).
-/// Семантика как у `RegexTokenizer`: последовательные непересекающиеся совпадения, позиции 0,1,… после reset (как `usize::MAX` + 1, + 2, …).
-fn process_lines_regex_shared(re: &Regex, lines: &[String]) -> i64 {
-    let mut hash: i64 = 0;
+    let mut count: u64 = 0;
     for line in lines {
-        let mut pos = usize::MAX;
         for m in re.find_iter(line) {
             if m.start() == m.end() {
                 continue;
             }
-            pos = pos.wrapping_add(1);
-            let h = hash_token_parts(m.as_str(), pos, 1, m.start(), m.end());
-            hash = hash.wrapping_add(31 * h);
+            canonical_hash_token(&mut h, m.as_str());
+            count += 1;
         }
     }
-    hash
+    (h, count)
 }
 
-fn process_lines_regex(tokenizer: &mut RegexTokenizer, lines: &[String]) -> i64 {
-    let mut hash: i64 = 0;
+// https://github.com/quickwit-oss/tantivy/pull/1759#discussion_r1061400442
+fn process_lines_regex(tokenizer: &mut RegexTokenizer, lines: &[String]) -> (i64, u64) {
+    let mut h: i64 = 0;
+    let mut count: u64 = 0;
     for line in lines {
         let mut stream = tokenizer.token_stream(line.as_str());
         while stream.advance() {
-            hash = hash.wrapping_add(31 * hash_token(stream.token()));
+            canonical_hash_token(&mut h, &stream.token().text);
+            count += 1;
         }
     }
-    hash
+    (h, count)
 }
 
-fn process_lines_facet(tokenizer: &mut FacetTokenizer, lines: &[String]) -> i64 {
-    let mut hash: i64 = 0;
+fn process_lines_facet(tokenizer: &mut FacetTokenizer, lines: &[String]) -> (i64, u64) {
+    let mut h: i64 = 0;
+    let mut count: u64 = 0;
     for line in lines {
         let facet = Facet::from_text(line).expect("valid facet path");
         let encoded = facet.encoded_str();
         let mut stream = tokenizer.token_stream(encoded);
         while stream.advance() {
-            hash = hash.wrapping_add(31 * hash_token(stream.token()));
+            // FacetTokenizer encodes '/' as '\x00' and strips the leading '/'.
+            // It also emits an empty root token ("") - skip it, Lucene/iresearch don't emit "/".
+            // Token "a\x00b\x00c" represents "/a/b/c" - restore it to match
+            // Lucene PathHierarchyTokenizer and iresearch PathHierarchyTokenizer.
+            let raw = &stream.token().text;
+            if raw.is_empty() {
+                continue;
+            }
+            canonical_hash_facet_token(&mut h, raw);
+            count += 1;
         }
     }
-    hash
+    (h, count)
 }
 
 fn percentiles(latencies_ns: &mut [u64]) -> (u64, u64, u64, u64) {
@@ -169,6 +162,17 @@ fn main() {
             let re = Regex::new(&args.regex_pattern).expect("valid regex");
             let mut tokenizer = RegexTokenizer::new(&args.regex_pattern).expect("valid regex");
 
+            if args.dump {
+                for line in &lines {
+                    for m in re.find_iter(line) {
+                        if m.start() != m.end() {
+                            println!("{}", m.as_str());
+                        }
+                    }
+                }
+                return;
+            }
+
             if args.per_line_regex_clone {
                 for _ in 0..args.warmup {
                     process_lines_regex(&mut tokenizer, &lines);
@@ -179,10 +183,12 @@ fn main() {
                 }
             }
 
+            let mut checksum = 0i64;
+            let mut token_count = 0u64;
             let mut latencies = Vec::with_capacity(args.runs as usize);
             for r in 0..args.runs {
                 let start = Instant::now();
-                let checksum = if args.per_line_regex_clone {
+                let (hash, count) = if args.per_line_regex_clone {
                     process_lines_regex(&mut tokenizer, &lines)
                 } else {
                     process_lines_regex_shared(&re, &lines)
@@ -190,36 +196,77 @@ fn main() {
                 let elapsed = start.elapsed().as_nanos() as u64;
                 latencies.push(elapsed);
                 if r == 0 {
-                    eprintln!("checksum(first run)={checksum}");
+                    checksum = hash;
+                    token_count = count;
                 }
             }
-            print_results(mode_label, args.runs, lines.len(), &mut latencies);
+            print_results(
+                mode_label,
+                args.runs,
+                lines.len(),
+                token_count,
+                &mut latencies,
+                checksum,
+            );
         }
         TokenizerKind::Facet => {
             let mut tokenizer = FacetTokenizer::default();
+
+            if args.dump {
+                for line in &lines {
+                    let facet = Facet::from_text(line).expect("valid facet path");
+                    let encoded = facet.encoded_str();
+                    let mut stream = tokenizer.token_stream(encoded);
+                    while stream.advance() {
+                        let raw = &stream.token().text;
+                        if !raw.is_empty() {
+                            println!("/{}", raw.replace('\x00', "/"));
+                        }
+                    }
+                }
+                return;
+            }
+
             for _ in 0..args.warmup {
                 process_lines_facet(&mut tokenizer, &lines);
             }
+            let mut checksum = 0i64;
+            let mut token_count = 0u64;
             let mut latencies = Vec::with_capacity(args.runs as usize);
             for r in 0..args.runs {
                 let start = Instant::now();
-                let checksum = process_lines_facet(&mut tokenizer, &lines);
+                let (hash, count) = process_lines_facet(&mut tokenizer, &lines);
                 let elapsed = start.elapsed().as_nanos() as u64;
                 latencies.push(elapsed);
                 if r == 0 {
-                    eprintln!("checksum(first run)={checksum}");
+                    checksum = hash;
+                    token_count = count;
                 }
             }
-            print_results(mode_label, args.runs, lines.len(), &mut latencies);
+            print_results(
+                mode_label,
+                args.runs,
+                lines.len(),
+                token_count,
+                &mut latencies,
+                checksum,
+            );
         }
     }
 }
 
-fn print_results(tokenizer: &str, runs: u32, line_count: usize, latencies: &mut [u64]) {
+fn print_results(
+    tokenizer: &str,
+    runs: u32,
+    line_count: usize,
+    token_count: u64,
+    latencies: &mut [u64],
+    checksum: i64,
+) {
     let (p50, p95, p99, p100) = percentiles(latencies);
     let mean_ns: u64 = latencies.iter().sum::<u64>() / latencies.len() as u64;
 
-    println!("tokenizer={tokenizer} runs={runs} lines={line_count}");
+    println!("tokenizer={tokenizer} runs={runs} lines={line_count} tokens={token_count}");
     println!(
         "time_ms p50={:.2} p95={:.2} p99={:.2} p100={:.2} mean={:.2}",
         p50 as f64 / 1e6,
@@ -228,7 +275,6 @@ fn print_results(tokenizer: &str, runs: u32, line_count: usize, latencies: &mut 
         p100 as f64 / 1e6,
         mean_ns as f64 / 1e6
     );
-    println!(
-        "time_ns p50={p50} p95={p95} p99={p99} p100={p100} mean={mean_ns}"
-    );
+    println!("time_ns p50={p50} p95={p95} p99={p99} p100={p100} mean={mean_ns}");
+    println!("checksum={checksum}");
 }

@@ -7,9 +7,9 @@ chmod +x scripts/download_and_prepare_wikipedia.sh
 ./scripts/download_and_prepare_wikipedia.sh
 ```
 
-По умолчанию качается **Simple English Wikipedia** (`simplewiki-latest-pages-articles.xml.bz2`) — заметно меньше, чем полный enwiki. Результат: `data/wiki_work/wiki_lines.txt` (одна строка — один документ, как для `LuceneTokenizerPerf` / `tantivy-bench`).
+По умолчанию качается **Simple English Wikipedia** (`simplewiki-latest-pages-articles.xml.bz2`) - заметно меньше, чем полный enwiki. Результат: `data/wiki_work/wiki_lines.txt` (одна строка = один документ, как для `LuceneTokenizerPerf` / `tantivy-bench`).
 
-Другой дамп (пример — первый кусок multistream enwiki; имя файла на зеркале может меняться):
+Другой дамп (пример -- первый кусок multistream enwiki; имя файла на зеркале может меняться):
 
 ```bash
 export WIKI_DUMP_URL='https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles-multistream1.xml-p1p41242.bz2'

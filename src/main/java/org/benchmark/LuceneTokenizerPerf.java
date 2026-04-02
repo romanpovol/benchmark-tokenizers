@@ -16,11 +16,9 @@ import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.analysis.path.PathHierarchyTokenizer;
+import org.apache.lucene.analysis.path.ReversePathHierarchyTokenizer;
 import org.apache.lucene.analysis.pattern.PatternTokenizer;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
-import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
-import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
-import org.apache.lucene.util.ArrayUtil;
 
 /**
  * Benchmark Lucene pattern and path-hierarchy tokenizers, following the style of
@@ -38,9 +36,9 @@ public final class LuceneTokenizerPerf {
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
             System.err.println(
-                    "Usage: LuceneTokenizerPerf <data-file> <pattern|path> [--regex-pattern REGEX] [--runs N] [--warmup N]");
-            System.err.println("pattern  — PatternTokenizer (default regex: " + DEFAULT_PATTERN + ")");
-            System.err.println("path     — PathHierarchyTokenizer");
+                    "Usage: LuceneTokenizerPerf <data-file> <pattern|path> [--regex-pattern REGEX] [--runs N] [--warmup N] [--reverse]");
+            System.err.println("pattern - PatternTokenizer (default regex: " + DEFAULT_PATTERN + ")");
+            System.err.println("path    - PathHierarchyTokenizer (forward); add --reverse for ReversePathHierarchyTokenizer");
             System.exit(1);
         }
 
@@ -49,7 +47,7 @@ public final class LuceneTokenizerPerf {
         String regexPattern = DEFAULT_PATTERN;
         int runs = DEFAULT_RUNS;
         int warmup = DEFAULT_WARMUP;
-
+        boolean reverse = false;
         for (int i = 2; i < args.length; i++) {
             switch (args[i]) {
                 case "--regex-pattern" -> {
@@ -70,6 +68,7 @@ public final class LuceneTokenizerPerf {
                     }
                     warmup = Integer.parseInt(args[++i]);
                 }
+                case "--reverse" -> reverse = true;
                 default -> throw new IllegalArgumentException("Unknown option: " + args[i]);
             }
         }
@@ -80,11 +79,11 @@ public final class LuceneTokenizerPerf {
             System.exit(1);
         }
 
-        Pattern compiled = Pattern.compile(regexPattern);
+        Pattern compiled = Pattern.compile(regexPattern, Pattern.UNICODE_CHARACTER_CLASS);
         Analyzer analyzer =
                 switch (mode) {
-                    case "pattern" -> new PatternAnalyzer(compiled, -1);
-                    case "path" -> new PathHierarchyAnalyzer();
+                    case "pattern" -> new PatternAnalyzer(compiled, 0);
+                    case "path" -> reverse ? new ReversePathHierarchyAnalyzer() : new PathHierarchyAnalyzer();
                     default ->
                             throw new IllegalArgumentException(
                                     "Second arg must be 'pattern' or 'path', got: " + args[1]);
@@ -94,15 +93,17 @@ public final class LuceneTokenizerPerf {
             processAllLinesOnce(analyzer, lines);
         }
 
+        long checksum = 0;
+        long tokenCount = 0;
         List<Long> runNanos = new ArrayList<>(runs);
         for (int r = 0; r < runs; r++) {
             long t0 = System.nanoTime();
-            long hash = processAllLinesOnce(analyzer, lines);
+            long[] result = processAllLinesOnce(analyzer, lines);
             long elapsed = System.nanoTime() - t0;
             runNanos.add(elapsed);
-            // keep hash observable across runs
             if (r == 0) {
-                System.err.println("checksum(first run)=" + hash);
+                checksum   = result[0];
+                tokenCount = result[1];
             }
         }
 
@@ -116,10 +117,11 @@ public final class LuceneTokenizerPerf {
 
         System.out.printf(
                 Locale.ROOT,
-                "tokenizer=%s runs=%d lines=%d%n",
+                "tokenizer=%s runs=%d lines=%d tokens=%d%n",
                 mode,
                 runs,
-                lines.size());
+                lines.size(),
+                tokenCount);
         System.out.printf(
                 Locale.ROOT,
                 "time_ms p50=%.2f p95=%.2f p99=%.2f p100=%.2f mean=%.2f%n",
@@ -136,6 +138,7 @@ public final class LuceneTokenizerPerf {
                 p99,
                 p100,
                 mean);
+        System.out.printf(Locale.ROOT, "checksum=%d%n", checksum);
     }
 
     private static List<String> loadLines(Path path) throws IOException {
@@ -152,42 +155,25 @@ public final class LuceneTokenizerPerf {
         return out;
     }
 
-    /**
-     * One full pass over all lines; per line: same token consumption as TestAnalyzerPerf (hash terms and attributes).
-     */
-    private static long processAllLinesOnce(Analyzer analyzer, List<String> lines) throws IOException {
-        long hash = 0;
+    private static long[] processAllLinesOnce(Analyzer analyzer, List<String> lines) throws IOException {
+        long h = 0;
+        long count = 0;
         for (String s : lines) {
             try (TokenStream ts = analyzer.tokenStream("field", new StringReader(s))) {
                 ts.reset();
-
                 CharTermAttribute termAtt = ts.getAttribute(CharTermAttribute.class);
-                PositionIncrementAttribute posIncAtt =
-                        ts.hasAttribute(PositionIncrementAttribute.class)
-                                ? ts.getAttribute(PositionIncrementAttribute.class)
-                                : null;
-                OffsetAttribute offsetAtt =
-                        ts.hasAttribute(OffsetAttribute.class)
-                                ? ts.getAttribute(OffsetAttribute.class)
-                                : null;
-
                 while (ts.incrementToken()) {
-                    hash += 31L * ArrayUtil.hashCode(termAtt.buffer(), 0, termAtt.length());
-                    if (posIncAtt != null) {
-                        hash += 31L * posIncAtt.getPositionIncrement();
-                    }
-                    if (offsetAtt != null) {
-                        hash += 31L * offsetAtt.startOffset();
-                        hash += 31L * offsetAtt.endOffset();
+                    count++;
+                    for (byte b : termAtt.toString().getBytes(StandardCharsets.UTF_8)) {
+                        h = h * 31 + (b & 0xFF);
                     }
                 }
                 ts.end();
             }
         }
-        return hash;
+        return new long[]{h, count};
     }
 
-    /** PatternTokenizer with split-style group ({@code group = -1}). */
     private static final class PatternAnalyzer extends Analyzer {
         private final Pattern pattern;
         private final int group;
@@ -208,6 +194,14 @@ public final class LuceneTokenizerPerf {
         @Override
         protected TokenStreamComponents createComponents(String fieldName) {
             Tokenizer src = new PathHierarchyTokenizer();
+            return new TokenStreamComponents(src);
+        }
+    }
+
+    private static final class ReversePathHierarchyAnalyzer extends Analyzer {
+        @Override
+        protected TokenStreamComponents createComponents(String fieldName) {
+            Tokenizer src = new ReversePathHierarchyTokenizer();
             return new TokenStreamComponents(src);
         }
     }

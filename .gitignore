@@ -1,0 +1,7 @@
+data/
+build/
+.gradle/
+iresearch-bench/build/
+tantivy-bench/target/
+sample.txt
+
