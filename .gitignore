@@ -4,4 +4,5 @@ build/
 iresearch-bench/build/
 tantivy-bench/target/
 sample.txt
+profile/
 

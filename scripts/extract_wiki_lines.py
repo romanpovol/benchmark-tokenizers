@@ -31,7 +31,7 @@ def iter_wiki_files(root: str):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Tanl wiki extract → one line per document")
+    ap = argparse.ArgumentParser(description="Tanl wiki extract -> one line per document")
     ap.add_argument("extracted_dir", help="Directory passed to WikipediaExtractor -o")
     ap.add_argument(
         "out_txt",

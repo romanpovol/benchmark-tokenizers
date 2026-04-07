@@ -397,7 +397,7 @@ def _do_compare(old_path: str, new_path: str) -> None:
     hdr = f"{'name':<{col}}  {'old':>10}  {'new':>10}  {'delta':>9}"
     sep = "─" * len(hdr)
     print(f"\n{sep}")
-    print(f"COMPARISON  {Path(old_path).name}  →  {Path(new_path).name}")
+    print(f"COMPARISON  {Path(old_path).name}  ->  {Path(new_path).name}")
     print(sep)
     print(hdr)
     print(sep)
@@ -567,7 +567,7 @@ examples:
         Path(args.o).parent.mkdir(parents=True, exist_ok=True)
         Path(args.o).write_text(output_text)
         saved_path = args.o
-        print(f"\nResults saved → {args.o}")
+        print(f"\nResults saved -> {args.o}")
 
     if args.compare:
         if not Path(args.compare).exists():

@@ -30,6 +30,7 @@ std::vector<std::string> load_lines(const std::string& path) {
   return lines;
 }
 
+__attribute__((noinline))
 uint64_t hash_term(uint64_t h, std::string_view term) {
   for (unsigned char b : term) {
     h = h * 31u + static_cast<uint64_t>(b);
@@ -37,6 +38,7 @@ uint64_t hash_term(uint64_t h, std::string_view term) {
   return h;
 }
 
+__attribute__((noinline))
 std::pair<int64_t, uint64_t> process_lines(
   irs::analysis::Analyzer& tokenizer, const std::vector<std::string>& lines) {
   auto* term_attr = irs::get<irs::TermAttr>(tokenizer);

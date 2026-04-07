@@ -9,3 +9,7 @@ cmake_minimum_required(VERSION 3.16)
 
 add_executable(iresearch-bench main.cpp)
 target_link_libraries(iresearch-bench PRIVATE iresearch-static)
+
+# Preserve frame pointers so perf/FlameGraph can unwind the call stack.
+# Has negligible perf impact (~1%) but is required for meaningful profiles.
+target_compile_options(iresearch-bench PRIVATE -fno-omit-frame-pointer)
