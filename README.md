@@ -4,9 +4,28 @@ Cross-system tokenizer benchmark: **Lucene**, **Tantivy**, **SereneDB**.
 
 Measures tokenization throughput and verifies that all systems produce identical tokens via a canonical checksum.
 
+Each timed run records one wall-clock duration in `--bench-runs-file` as uint64 ns. `bench.py` prefers that file when it is present and non-empty; otherwise it parses
+stdout for per-run or summary timing fields to build the same table.
+
 Supported tokenizers:
-- `pattern` -- regex-based word tokenizer (`\w+`)
-- `path` -- path hierarchy tokenizer (emits cumulative prefixes: `/a`, `/a/b`, `/a/b/c`)
+- `pattern` - regex-based word tokenizer (`\w+`)
+- `path` - path hierarchy tokenizer (emits cumulative prefixes: `/a`, `/a/b`, `/a/b/c`)
+
+## Output from `bench.py`
+
+When everything succeeds, `bench.py` prints RESULTS table. Each row is one benchmark name
+(engine and tokenizer). Columns:
+
+- **mean** - average wall time over all timed runs, in auto-scaled units (ns through
+  seconds)
+- **p50, p95, p99, p100** - percentiles of the same per-run wall times (distribution of single
+  runs, slowest run at p100)
+- **95%CI** and **99%CI** - each as `lower..upper`. These are **bootstrap percentile intervals for
+  the mean** wall time over runs. Here **95%** and **99%** are **confidence levels** for that mean,
+  not latency percentiles
+- **tok/s** - throughput from total tokens and **mean** time
+
+By default, native timing lines stay hidden: `bench.py` captures stdout for parsing only. Use **`make ... DEBUG=1`** to print them after each run
 
 ---
 
@@ -29,6 +48,9 @@ Edit `bench.py` so the new tokenizer can be selected and executed:
 - Parsing requirements
   - Each system must print total tokens processed and a canonical checksum
   - `bench.py` compares checksums and fails the run on mismatch
+  - Implement `--bench-runs-file PATH`: write one `uint64` little-endian value per timed run (same
+    order as `--runs`); keep stdout compact (no huge `runs_ns=` lines). `bench.py` uses that file to
+    compute **95%** and **99%** bootstrap CIs for the mean wall time per run
 
 ### Common pitfalls
 
@@ -61,7 +83,7 @@ Edit `bench.py` so the new tokenizer can be selected and executed:
 cd tantivy-bench && cargo build --release && cd ..
 
 # 2. Run (Lucene builds automatically via Gradle on first run)
-make bench DATA=tantivy-bench/test_words.txt
+make bench DATA=test_words.txt
 ```
 
 ---
@@ -104,7 +126,7 @@ Binary lands at: `../serenedb/build_bench/bin/iresearch-bench`
 ```bash
 export IRESEARCH_SRC=../serenedb
 
-make bench DATA=tantivy-bench/test_words.txt
+make bench DATA=test_words.txt
 ```
 
 ---
@@ -129,14 +151,15 @@ make help                            show all targets and variables
 
 | Variable          | Description                                           | Default                        |
 |-------------------|-------------------------------------------------------|--------------------------------|
-| `DATA`            | Input file -- one document per line                   | `tantivy-bench/test_words.txt` |
+| `DATA`            | Input file - one document per line                    | `test_words.txt`               |
 | `COUNT`           | Number of timed runs                                  | `10`                           |
 | `WARMUP`          | Number of warmup runs (not measured)                  | `2`                            |
 | `SYSTEMS`         | `lucene`, `tantivy`, `iresearch`, or `all`            | `all`                          |
-| `REVERSE`         | `1` -- reverse path hierarchy (path only, no Tantivy) | --                              |
-| `OUTPUT`          | Save results to file                                  | --                              |
-| `COMPARE`         | Compare against a previously saved result file        | --                              |
-| `IRESEARCH_SRC`   | Path to cloned SereneDB repository                    | --                              |
+| `REVERSE`         | `1` - reverse path hierarchy (path only, no Tantivy)  | -                              |
+| `DEBUG`           | `1` - pass `--debug` (echo native stdout; default is capture-only, no echo) | -              |
+| `OUTPUT`          | Save results to file                                  | -                              |
+| `COMPARE`         | Compare against a previously saved result file        | -                              |
+| `IRESEARCH_SRC`   | Path to cloned SereneDB repository                    | -                              |
 | `IRESEARCH_BUILD` | Path to SereneDB build directory                      | `$IRESEARCH_SRC/build_bench`   |
 
 ---
@@ -162,9 +185,10 @@ make bench DATA=data/wiki.txt COUNT=10 OUTPUT=results/new.txt COMPARE=results/ba
 
 ## Datasets
 
-### Built-in test file
+### Built-in test files (repo root)
 
-`tantivy-bench/test_words.txt` -- small sample for quick smoke-testing.
+- `test_words.txt` -- a few lines of plain text for pattern tokenizer smoke tests.
+- `test_data.txt` -- short facet-style paths (`/a/b/c`) for path tokenizer smoke tests.
 
 ### Path hierarchy dataset
 
@@ -220,7 +244,7 @@ make iresearch-build-prof IRESEARCH_SRC=../serenedb
 # Then profile using that build
 make profile-iresearch \
   IRESEARCH_BUILD=../serenedb/build_prof \
-  DATA=tantivy-bench/test_words.txt \
+  DATA=test_words.txt \
   PROF_TOKENIZER=pattern \
   PROF_COUNT=200
 # -> profile/flamegraph.svg  with full RE2 stacks

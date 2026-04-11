@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <fstream>
@@ -72,10 +71,16 @@ Percentiles calc_percentiles(std::vector<uint64_t>& v) {
   };
 }
 
+static void write_u64_le(std::ostream& out, uint64_t v) {
+  for (int k = 0; k < 8; ++k) {
+    out.put(static_cast<char>((v >> (8 * k)) & 0xFFu));
+  }
+}
+
 void usage() {
   std::cerr <<
     "Usage: iresearch-bench --data FILE [--tokenizer pattern|path|path_hierarchy]\n"
-    "                       [--runs N] [--warmup N] [--dump]\n"
+    "                       [--runs N] [--warmup N] [--dump] [--bench-runs-file PATH]\n"
     "\n"
     "PatternTokenizer options (pattern / path):\n"
     "  --regex-pattern REGEX\n"
@@ -105,6 +110,7 @@ int main(int argc, char** argv) {
   std::string ph_replacement = "/";
   bool ph_reverse = false;
   int ph_skip = 0;
+  std::string bench_runs_file;
 
   for (int i = 1; i < argc; ++i) {
     std::string_view arg = argv[i];
@@ -135,6 +141,8 @@ int main(int argc, char** argv) {
       ph_reverse = true;
     } else if (arg == "--skip") {
       ph_skip = std::stoi(std::string(next_arg()));
+    } else if (arg == "--bench-runs-file") {
+      bench_runs_file = std::string(next_arg());
     } else {
       std::cerr << "Unknown option: " << argv[i] << "\n";
       usage();
@@ -235,6 +243,7 @@ int main(int argc, char** argv) {
     }
   }
 
+  std::vector<uint64_t> latencies_for_dump = latencies;
   auto p = calc_percentiles(latencies);
   uint64_t mean_ns =
     std::accumulate(latencies.begin(), latencies.end(), uint64_t{0}) /
@@ -252,6 +261,16 @@ int main(int argc, char** argv) {
               static_cast<unsigned long long>(p.p99),
               static_cast<unsigned long long>(p.p100),
               static_cast<unsigned long long>(mean_ns));
+  if (!bench_runs_file.empty()) {
+    std::ofstream out(bench_runs_file, std::ios::binary | std::ios::trunc);
+    if (!out) {
+      std::cerr << "Cannot create --bench-runs-file: " << bench_runs_file << "\n";
+      return 1;
+    }
+    for (uint64_t v : latencies_for_dump) {
+      write_u64_le(out, v);
+    }
+  }
   std::printf("checksum=%lld\n", static_cast<long long>(checksum));
 
   return 0;

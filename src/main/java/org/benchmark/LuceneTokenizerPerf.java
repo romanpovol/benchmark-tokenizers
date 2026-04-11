@@ -3,6 +3,8 @@ package org.benchmark;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.StringReader;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,7 +38,7 @@ public final class LuceneTokenizerPerf {
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
             System.err.println(
-                    "Usage: LuceneTokenizerPerf <data-file> <pattern|path> [--regex-pattern REGEX] [--runs N] [--warmup N] [--reverse]");
+                    "Usage: LuceneTokenizerPerf <data-file> <pattern|path> [--regex-pattern REGEX] [--runs N] [--warmup N] [--reverse] [--bench-runs-file PATH]");
             System.err.println("pattern - PatternTokenizer (default regex: " + DEFAULT_PATTERN + ")");
             System.err.println("path    - PathHierarchyTokenizer (forward); add --reverse for ReversePathHierarchyTokenizer");
             System.exit(1);
@@ -48,6 +50,7 @@ public final class LuceneTokenizerPerf {
         int runs = DEFAULT_RUNS;
         int warmup = DEFAULT_WARMUP;
         boolean reverse = false;
+        Path benchRunsFile = null;
         for (int i = 2; i < args.length; i++) {
             switch (args[i]) {
                 case "--regex-pattern" -> {
@@ -69,6 +72,12 @@ public final class LuceneTokenizerPerf {
                     warmup = Integer.parseInt(args[++i]);
                 }
                 case "--reverse" -> reverse = true;
+                case "--bench-runs-file" -> {
+                    if (i + 1 >= args.length) {
+                        throw new IllegalArgumentException("--bench-runs-file needs a value");
+                    }
+                    benchRunsFile = Path.of(args[++i]);
+                }
                 default -> throw new IllegalArgumentException("Unknown option: " + args[i]);
             }
         }
@@ -107,13 +116,15 @@ public final class LuceneTokenizerPerf {
             }
         }
 
-        Collections.sort(runNanos);
         int n = runNanos.size();
-        long p50 = runNanos.get((int) (n * 0.50));
-        long p95 = runNanos.get((int) (n * 0.95));
-        long p99 = runNanos.get(Math.min((int) (n * 0.99), n - 1));
-        long p100 = runNanos.get(n - 1);
         long mean = runNanos.stream().mapToLong(Long::longValue).sum() / n;
+
+        List<Long> sorted = new ArrayList<>(runNanos);
+        Collections.sort(sorted);
+        long p50 = sorted.get((int) (n * 0.50));
+        long p95 = sorted.get((int) (n * 0.95));
+        long p99 = sorted.get(Math.min((int) (n * 0.99), n - 1));
+        long p100 = sorted.get(n - 1);
 
         System.out.printf(
                 Locale.ROOT,
@@ -138,6 +149,13 @@ public final class LuceneTokenizerPerf {
                 p99,
                 p100,
                 mean);
+        if (benchRunsFile != null) {
+            ByteBuffer buf = ByteBuffer.allocate(n * 8).order(ByteOrder.LITTLE_ENDIAN);
+            for (long v : runNanos) {
+                buf.putLong(v);
+            }
+            Files.write(benchRunsFile, buf.array());
+        }
         System.out.printf(Locale.ROOT, "checksum=%d%n", checksum);
     }
 
