@@ -9,8 +9,15 @@
 // ============================================================
 // Подключение библиотек
 // ============================================================
-#include "double_metaphone.h"  // pixelglow
-#include "mtfn.h"              // fizzup/mtfn
+
+// pixelglow
+#include "double_metaphone.h"
+
+// slacy — 
+#include "slacy_double_metaphone.h"
+
+// mtfn
+#include "mtfn.h"
 
 // ============================================================
 // Тестовые данные
@@ -78,18 +85,14 @@ static void LoadFileWordsOnce() {
         gFileWords = LoadWordsFromFile("../data/words.txt", 100000);
         if (!gFileWords.empty()) {
             std::cout << "[INFO] Loaded " << gFileWords.size()
-                      << " words from data/words.txt\n";
+                      << " words from ../data/words.txt\n";
         } else {
-            std::cout << "[INFO] data/words.txt not found, "
+            std::cout << "[INFO] ../data/words.txt not found, "
                          "skipping file-based benchmarks\n";
         }
         loaded = true;
     }
 }
-
-// ============================================================
-// Утилита: смешанный список слов
-// ============================================================
 
 static std::vector<std::string> BuildMixedWordList(size_t n) {
     std::vector<std::string> all;
@@ -197,10 +200,107 @@ static void BM_Pixelglow_Batch(benchmark::State& state) {
                             static_cast<int64_t>(words.size()));
 }
 BENCHMARK(BM_Pixelglow_Batch)
-    ->Arg(100)
-    ->Arg(1000)
-    ->Arg(10000)
-    ->Arg(100000);
+    ->Arg(100)->Arg(1000)->Arg(10000)->Arg(100000);
+
+// ============================================================
+// SLACY бенчмарки
+// ============================================================
+
+static void BM_Slacy_ShortWords(benchmark::State& state) {
+    for (auto _ : state) {
+        for (const auto& word : kShortWords) {
+            std::vector<std::string> codes;
+            DoubleMetaphone(word, &codes);
+            benchmark::DoNotOptimize(codes);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() *
+                            static_cast<int64_t>(kShortWords.size()));
+}
+BENCHMARK(BM_Slacy_ShortWords);
+
+static void BM_Slacy_MediumWords(benchmark::State& state) {
+    for (auto _ : state) {
+        for (const auto& word : kMediumWords) {
+            std::vector<std::string> codes;
+            DoubleMetaphone(word, &codes);
+            benchmark::DoNotOptimize(codes);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() *
+                            static_cast<int64_t>(kMediumWords.size()));
+}
+BENCHMARK(BM_Slacy_MediumWords);
+
+static void BM_Slacy_LongWords(benchmark::State& state) {
+    for (auto _ : state) {
+        for (const auto& word : kLongWords) {
+            std::vector<std::string> codes;
+            DoubleMetaphone(word, &codes);
+            benchmark::DoNotOptimize(codes);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() *
+                            static_cast<int64_t>(kLongWords.size()));
+}
+BENCHMARK(BM_Slacy_LongWords);
+
+static void BM_Slacy_TrickyWords(benchmark::State& state) {
+    for (auto _ : state) {
+        for (const auto& word : kTrickyWords) {
+            std::vector<std::string> codes;
+            DoubleMetaphone(word, &codes);
+            benchmark::DoNotOptimize(codes);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() *
+                            static_cast<int64_t>(kTrickyWords.size()));
+}
+BENCHMARK(BM_Slacy_TrickyWords);
+
+static void BM_Slacy_SingleWord(benchmark::State& state) {
+    const std::string word = "Schwarzenegger";
+    for (auto _ : state) {
+        std::vector<std::string> codes;
+        DoubleMetaphone(word, &codes);
+        benchmark::DoNotOptimize(codes);
+    }
+    state.SetItemsProcessed(state.iterations());
+}
+BENCHMARK(BM_Slacy_SingleWord);
+
+static void BM_Slacy_FileWords(benchmark::State& state) {
+    LoadFileWordsOnce();
+    if (gFileWords.empty()) {
+        state.SkipWithMessage("data/words.txt not available");
+        return;
+    }
+    for (auto _ : state) {
+        for (const auto& word : gFileWords) {
+            std::vector<std::string> codes;
+            DoubleMetaphone(word, &codes);
+            benchmark::DoNotOptimize(codes);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() *
+                            static_cast<int64_t>(gFileWords.size()));
+}
+BENCHMARK(BM_Slacy_FileWords);
+
+static void BM_Slacy_Batch(benchmark::State& state) {
+    auto words = BuildMixedWordList(static_cast<size_t>(state.range(0)));
+    for (auto _ : state) {
+        for (const auto& word : words) {
+            std::vector<std::string> codes;
+            DoubleMetaphone(word, &codes);
+            benchmark::DoNotOptimize(codes);
+        }
+    }
+    state.SetItemsProcessed(state.iterations() *
+                            static_cast<int64_t>(words.size()));
+}
+BENCHMARK(BM_Slacy_Batch)
+    ->Arg(100)->Arg(1000)->Arg(10000)->Arg(100000);
 
 // ============================================================
 // MTFN бенчмарки
@@ -269,7 +369,6 @@ static void BM_Mtfn_SingleWord(benchmark::State& state) {
 }
 BENCHMARK(BM_Mtfn_SingleWord);
 
-// Бенчмарк сравнения (уникальная фича mtfn — operator==)
 static void BM_Mtfn_Compare(benchmark::State& state) {
     for (auto _ : state) {
         for (size_t i = 0; i + 1 < kMediumWords.size(); i += 2) {
@@ -282,11 +381,10 @@ static void BM_Mtfn_Compare(benchmark::State& state) {
 }
 BENCHMARK(BM_Mtfn_Compare);
 
-// Бенчмарк без ограничения длины (limit_length = false)
 static void BM_Mtfn_MediumWords_Unlimited(benchmark::State& state) {
     for (auto _ : state) {
         for (const auto& word : kMediumWords) {
-            mtfn::sound s(word, false);  // limit_length = false
+            mtfn::sound s(word, false);
             benchmark::DoNotOptimize(s.primary());
             benchmark::DoNotOptimize(s.alternate());
         }

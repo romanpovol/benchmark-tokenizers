@@ -26,14 +26,20 @@ set(PIXELGLOW_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/libs/pixelglow" CACHE PATH "")
 
 # mtfn — один .cpp + один .h в корне репозитория
 set(MTFN_DIR "${CMAKE_SOURCE_DIR}/libs/mtfn")
-
 add_library(mtfn_lib STATIC "${MTFN_DIR}/mtfn.cpp")
 target_include_directories(mtfn_lib PUBLIC "${MTFN_DIR}")
 target_compile_options(mtfn_lib PRIVATE "-include" "cstdarg")
 
+# slacy — header-only
+set(SLACY_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/libs/slacy" CACHE PATH "")
+
 # Бенчмарк
 add_executable(dm_bench bench_main.cpp)
-target_include_directories(dm_bench PRIVATE ${PIXELGLOW_INCLUDE_DIR})
+target_include_directories(dm_bench PRIVATE
+    ${PIXELGLOW_INCLUDE_DIR}
+    ${SLACY_INCLUDE_DIR}
+    ${MTFN_DIR}
+)
 target_link_libraries(dm_bench
     PRIVATE
         benchmark::benchmark
