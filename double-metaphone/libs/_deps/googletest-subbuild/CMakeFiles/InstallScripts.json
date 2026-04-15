@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/r.povolotskiy/benchmark-tokenizers/double-metaphone/libs/_deps/googletest-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

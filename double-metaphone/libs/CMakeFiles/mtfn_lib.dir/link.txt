@@ -1,0 +1,2 @@
+/usr/bin/ar qc libmtfn_lib.a CMakeFiles/mtfn_lib.dir/mtfn/mtfn.cpp.o
+/usr/bin/ranlib libmtfn_lib.a
