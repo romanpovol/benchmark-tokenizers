@@ -75,7 +75,7 @@ static std::vector<std::string> gFileWords;
 static void LoadFileWordsOnce() {
     static bool loaded = false;
     if (!loaded) {
-        gFileWords = LoadWordsFromFile("data/words.txt", 100000);
+        gFileWords = LoadWordsFromFile("../data/words.txt", 100000);
         if (!gFileWords.empty()) {
             std::cout << "[INFO] Loaded " << gFileWords.size()
                       << " words from data/words.txt\n";

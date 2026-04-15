@@ -29,6 +29,7 @@ set(MTFN_DIR "${CMAKE_SOURCE_DIR}/libs/mtfn")
 
 add_library(mtfn_lib STATIC "${MTFN_DIR}/mtfn.cpp")
 target_include_directories(mtfn_lib PUBLIC "${MTFN_DIR}")
+target_compile_options(mtfn_lib PRIVATE "-include" "cstdarg")
 
 # Бенчмарк
 add_executable(dm_bench bench_main.cpp)
