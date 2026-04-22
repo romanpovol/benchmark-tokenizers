@@ -22,7 +22,9 @@ Examples:
 
 import argparse
 import os
+import random
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -39,6 +41,10 @@ class BenchResult:
     runs: int
     lines: int
     mean_ns: float
+    ci_lo_ns: float   # 95% bootstrap CI for mean run time
+    ci_hi_ns: float
+    ci99_lo_ns: float
+    ci99_hi_ns: float
     p50_ns: float
     p95_ns: float
     p99_ns: float
@@ -50,6 +56,10 @@ class BenchResult:
         """Serialise to go-bench-inspired one-liner for result files."""
         return (
             f"{self.name}\t{self.runs}\t{self.mean_ns:.0f} ns/op"
+            f"\t{self.ci_lo_ns:.0f} ci95-lo-ns"
+            f"\t{self.ci_hi_ns:.0f} ci95-hi-ns"
+            f"\t{self.ci99_lo_ns:.0f} ci99-lo-ns"
+            f"\t{self.ci99_hi_ns:.0f} ci99-hi-ns"
             f"\t{self.p50_ns:.0f} p50-ns"
             f"\t{self.p95_ns:.0f} p95-ns"
             f"\t{self.p99_ns:.0f} p99-ns"
@@ -57,12 +67,43 @@ class BenchResult:
         )
 
 _HEADER_RE   = re.compile(r"tokenizer=\S+\s+runs=(\d+)\s+lines=(\d+)(?:\s+tokens=(\d+))?")
+_RUNS_NS_RE  = re.compile(r"^runs_ns=([\d,]+)\s*$", re.MULTILINE)
+
 _NS_RE       = re.compile(
     r"time_ns\s+p50=(\d+(?:\.\d+)?)\s+p95=(\d+(?:\.\d+)?)"
     r"\s+p99=(\d+(?:\.\d+)?)\s+p100=(\d+(?:\.\d+)?)\s+mean=(\d+(?:\.\d+)?)"
 )
 _CHECKSUM_RE = re.compile(r"^checksum=(-?\d+)", re.MULTILINE)
-_LINE_RE     = re.compile(
+# New format: mean + bootstrap 95% / 99% CI + latency percentiles.
+_LINE_RE_FULL = re.compile(
+    r"(Benchmark\S+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s+ns/op"
+    r"\s+(\d+(?:\.\d+)?)\s+ci95-lo-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+ci95-hi-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+ci99-lo-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+ci99-hi-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+p50-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+p95-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+p99-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+p100-ns"
+)
+# Saved `-o` lines from before ci99 columns (ci95 + percentiles only).
+_LINE_RE_FULL_V1 = re.compile(
+    r"(Benchmark\S+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s+ns/op"
+    r"\s+(\d+(?:\.\d+)?)\s+ci95-lo-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+ci95-hi-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+p50-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+p95-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+p99-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+p100-ns"
+)
+# Saved file: mean + CI only (no percentiles) - older `-o` output.
+_LINE_RE_CI = re.compile(
+    r"(Benchmark\S+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s+ns/op"
+    r"\s+(\d+(?:\.\d+)?)\s+ci95-lo-ns"
+    r"\s+(\d+(?:\.\d+)?)\s+ci95-hi-ns"
+)
+# Legacy saved lines (percentiles).
+_LINE_RE_PCT = re.compile(
     r"(Benchmark\S+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s+ns/op"
     r"\s+(\d+(?:\.\d+)?)\s+p50-ns"
     r"\s+(\d+(?:\.\d+)?)\s+p95-ns"
@@ -70,23 +111,125 @@ _LINE_RE     = re.compile(
     r"\s+(\d+(?:\.\d+)?)\s+p100-ns"
 )
 
+_BOOTSTRAP_B = 4000
+_BOOTSTRAP_SEED = 1
 
-def _parse_run_output(text: str, name: str) -> Optional[BenchResult]:
+
+def _mk_runs_dump_path() -> Path:
+    fd, name = tempfile.mkstemp(prefix="tokbench_", suffix=".runs")
+    os.close(fd)
+    return Path(name)
+
+
+def _read_run_times_le(path: Path) -> list[float]:
+    """Read per-run wall times written as uint64 little-endian (one per 8 bytes)."""
+    data = path.read_bytes()
+    if not data:
+        return []
+    if len(data) % 8 != 0:
+        raise ValueError(f"runs dump size {len(data)} is not a multiple of 8")
+    n = len(data) // 8
+    return [float(x) for x in struct.unpack(f"<{n}Q", data)]
+
+
+def _latency_percentiles_ns(run_ns: list[float]) -> tuple[float, float, float, float]:
+    """p50 / p95 / p99 / p100 over per-run wall times (same indexing as Rust/Java/C++ benches)."""
+    if not run_ns:
+        return (0.0, 0.0, 0.0, 0.0)
+    s = sorted(run_ns)
+    n = len(s)
+    p50 = s[int(n * 0.50)]
+    p95 = s[int(n * 0.95)]
+    p99 = s[min(int(n * 0.99), n - 1)]
+    p100 = s[n - 1]
+    return (p50, p95, p99, p100)
+
+
+def _bootstrap_cis_mean_ns(
+    runs_ns: list[float], *, b: int = _BOOTSTRAP_B, seed: int = _BOOTSTRAP_SEED
+) -> tuple[float, float, float, float, float]:
+    """Bootstrap distribution of mean(run); return (mean_ns, ci95_lo, ci95_hi, ci99_lo, ci99_hi)."""
+    n = len(runs_ns)
+    if n == 0:
+        return (0.0, 0.0, 0.0, 0.0, 0.0)
+    mean_ns = sum(runs_ns) / n
+    if n < 2:
+        return (mean_ns, mean_ns, mean_ns, mean_ns, mean_ns)
+    rng = random.Random(seed)
+    boots: list[float] = []
+    for _ in range(b):
+        s = 0.0
+        for _ in range(n):
+            s += runs_ns[rng.randrange(n)]
+        boots.append(s / n)
+    boots.sort()
+
+    def interval(alpha: float) -> tuple[float, float]:
+        lo_i = max(0, int((alpha / 2) * b))
+        hi_i = min(b - 1, int((1 - alpha / 2) * b))
+        return (boots[lo_i], boots[hi_i])
+
+    lo95, hi95 = interval(0.05)
+    lo99, hi99 = interval(0.01)
+    return (mean_ns, lo95, hi95, lo99, hi99)
+
+
+def _parse_run_output(
+    text: str,
+    name: str,
+    *,
+    runs_path: Optional[Path] = None,
+) -> Optional[BenchResult]:
     h = _HEADER_RE.search(text)
-    n = _NS_RE.search(text)
-    if not h or not n:
+    if not h:
         return None
     cs_m = _CHECKSUM_RE.search(text)
+
+    run_vals: Optional[list[float]] = None
+    if runs_path is not None and runs_path.is_file() and runs_path.stat().st_size > 0:
+        try:
+            run_vals = _read_run_times_le(runs_path)
+        except (OSError, ValueError):
+            run_vals = None
+
+    if run_vals:
+        mean_ns, ci95_lo, ci95_hi, ci99_lo, ci99_hi = _bootstrap_cis_mean_ns(run_vals)
+        p50, p95, p99, p100 = _latency_percentiles_ns(run_vals)
+    else:
+        runs_m = _RUNS_NS_RE.search(text)
+        if runs_m:
+            parts = [p for p in runs_m.group(1).split(",") if p.strip()]
+            if not parts:
+                return None
+            run_vals = [float(x) for x in parts]
+            mean_ns, ci95_lo, ci95_hi, ci99_lo, ci99_hi = _bootstrap_cis_mean_ns(run_vals)
+            p50, p95, p99, p100 = _latency_percentiles_ns(run_vals)
+        else:
+            n = _NS_RE.search(text)
+            if not n:
+                return None
+            mean_ns = float(n.group(5))
+            ci95_lo = ci95_hi = mean_ns
+            ci99_lo = ci99_hi = mean_ns
+            p50 = float(n.group(1))
+            p95 = float(n.group(2))
+            p99 = float(n.group(3))
+            p100 = float(n.group(4))
+
     return BenchResult(
         name=name,
         runs=int(h.group(1)),
         lines=int(h.group(2)),
         tokens=int(h.group(3)) if h.group(3) else None,
-        p50_ns=float(n.group(1)),
-        p95_ns=float(n.group(2)),
-        p99_ns=float(n.group(3)),
-        p100_ns=float(n.group(4)),
-        mean_ns=float(n.group(5)),
+        mean_ns=mean_ns,
+        ci_lo_ns=ci95_lo,
+        ci_hi_ns=ci95_hi,
+        ci99_lo_ns=ci99_lo,
+        ci99_hi_ns=ci99_hi,
+        p50_ns=p50,
+        p95_ns=p95,
+        p99_ns=p99,
+        p100_ns=p100,
         checksum=int(cs_m.group(1)) if cs_m else None,
     )
 
@@ -95,42 +238,121 @@ def _parse_result_file(path: str) -> dict[str, BenchResult]:
     results: dict[str, BenchResult] = {}
     with open(path) as f:
         for raw in f:
-            m = _LINE_RE.search(raw)
+            m = _LINE_RE_FULL.search(raw)
             if m:
                 name = m.group(1)
+                mean_ns = float(m.group(3))
                 results[name] = BenchResult(
                     name=name,
                     runs=int(m.group(2)),
                     lines=0,
-                    mean_ns=float(m.group(3)),
-                    p50_ns=float(m.group(4)),
-                    p95_ns=float(m.group(5)),
-                    p99_ns=float(m.group(6)),
-                    p100_ns=float(m.group(7)),
+                    mean_ns=mean_ns,
+                    ci_lo_ns=float(m.group(4)),
+                    ci_hi_ns=float(m.group(5)),
+                    ci99_lo_ns=float(m.group(6)),
+                    ci99_hi_ns=float(m.group(7)),
+                    p50_ns=float(m.group(8)),
+                    p95_ns=float(m.group(9)),
+                    p99_ns=float(m.group(10)),
+                    p100_ns=float(m.group(11)),
+                )
+                continue
+            m = _LINE_RE_FULL_V1.search(raw)
+            if m:
+                name = m.group(1)
+                mean_ns = float(m.group(3))
+                results[name] = BenchResult(
+                    name=name,
+                    runs=int(m.group(2)),
+                    lines=0,
+                    mean_ns=mean_ns,
+                    ci_lo_ns=float(m.group(4)),
+                    ci_hi_ns=float(m.group(5)),
+                    ci99_lo_ns=mean_ns,
+                    ci99_hi_ns=mean_ns,
+                    p50_ns=float(m.group(6)),
+                    p95_ns=float(m.group(7)),
+                    p99_ns=float(m.group(8)),
+                    p100_ns=float(m.group(9)),
+                )
+                continue
+            m = _LINE_RE_CI.search(raw)
+            if m:
+                name = m.group(1)
+                mean_ns = float(m.group(3))
+                results[name] = BenchResult(
+                    name=name,
+                    runs=int(m.group(2)),
+                    lines=0,
+                    mean_ns=mean_ns,
+                    ci_lo_ns=float(m.group(4)),
+                    ci_hi_ns=float(m.group(5)),
+                    ci99_lo_ns=mean_ns,
+                    ci99_hi_ns=mean_ns,
+                    p50_ns=mean_ns,
+                    p95_ns=mean_ns,
+                    p99_ns=mean_ns,
+                    p100_ns=mean_ns,
+                )
+                continue
+            m2 = _LINE_RE_PCT.search(raw)
+            if m2:
+                name = m2.group(1)
+                mean_ns = float(m2.group(3))
+                results[name] = BenchResult(
+                    name=name,
+                    runs=int(m2.group(2)),
+                    lines=0,
+                    mean_ns=mean_ns,
+                    ci_lo_ns=mean_ns,
+                    ci_hi_ns=mean_ns,
+                    ci99_lo_ns=mean_ns,
+                    ci99_hi_ns=mean_ns,
+                    p50_ns=float(m2.group(4)),
+                    p95_ns=float(m2.group(5)),
+                    p99_ns=float(m2.group(6)),
+                    p100_ns=float(m2.group(7)),
                 )
     return results
 
 def _run_lucene(tokenizer: str, data: Path, count: int, warmup: int,
-                reverse: bool = False) -> Optional[BenchResult]:
+                reverse: bool = False, debug: bool = False) -> Optional[BenchResult]:
     name = f"BenchmarkLucene/{tokenizer.capitalize()}"
     rev_flag = " --reverse" if reverse else ""
-    args_str = f"{data} {tokenizer} --runs {count} --warmup {warmup}{rev_flag}"
-    cmd = ["./gradlew", "run", "-q", f"--args={args_str}"]
+    runs_path = _mk_runs_dump_path()
+    parsed: Optional[BenchResult] = None
+    combined = ""
+    try:
+        args_str = (
+            f"{data} {tokenizer} --runs {count} --warmup {warmup}{rev_flag} "
+            f"--bench-runs-file {runs_path.resolve()}"
+        )
+        cmd = ["./gradlew", "run", "-q", f"--args={args_str}"]
 
-    print(f"  {name} ...", end="", flush=True)
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, cwd=ROOT, stdin=subprocess.DEVNULL
-    )
-    combined = result.stdout + result.stderr
+        print(f"  {name} ...", end="", flush=True)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=ROOT, stdin=subprocess.DEVNULL
+        )
+        combined = result.stdout + result.stderr
 
-    if result.returncode != 0:
-        print(" FAILED")
-        _print_subprocess_err(combined)
-        return None
+        if result.returncode != 0:
+            print(" FAILED")
+            _print_subprocess_err(combined)
+            return None
 
-    parsed = _parse_run_output(combined, name)
+        if debug:
+            _echo_captured_stdout(result)
+        parsed = _parse_run_output(combined, name, runs_path=runs_path)
+    finally:
+        runs_path.unlink(missing_ok=True)
+
     if parsed:
-        print(f"  {_fmt_ns(parsed.mean_ns)} mean  ({parsed.runs} runs, {parsed.lines:,} lines)")
+        print(
+            f"  {_fmt_ns(parsed.mean_ns)} mean  p50={_fmt_ns(parsed.p50_ns)}  "
+            f"95% CI [{_fmt_ns(parsed.ci_lo_ns)}, {_fmt_ns(parsed.ci_hi_ns)}]  "
+            f"99% CI [{_fmt_ns(parsed.ci99_lo_ns)}, {_fmt_ns(parsed.ci99_hi_ns)}]  "
+            f"({parsed.runs} runs, {parsed.lines:,} lines)"
+        )
     else:
         print(" PARSE ERROR")
         _print_subprocess_err(combined[:500])
@@ -138,35 +360,50 @@ def _run_lucene(tokenizer: str, data: Path, count: int, warmup: int,
 
 
 def _run_tantivy(tokenizer: str, data: Path, count: int, warmup: int,
-                 reverse: bool = False) -> Optional[BenchResult]:
+                 reverse: bool = False, debug: bool = False) -> Optional[BenchResult]:
     if reverse and tokenizer == "path":
         # Tantivy FacetTokenizer has no reverse mode
         return None
     name = f"BenchmarkTantivy/{tokenizer.capitalize()}"
     tantivy_type = {"pattern": "regex", "path": "facet"}[tokenizer]
-    cmd = [
-        "cargo", "run", "--release", "-q", "--",
-        "--data", str(data),
-        "--tokenizer", tantivy_type,
-        "--runs", str(count),
-        "--warmup", str(warmup),
-    ]
+    runs_path = _mk_runs_dump_path()
+    parsed: Optional[BenchResult] = None
+    combined = ""
+    try:
+        cmd = [
+            "cargo", "run", "--release", "-q", "--",
+            "--data", str(data),
+            "--tokenizer", tantivy_type,
+            "--runs", str(count),
+            "--warmup", str(warmup),
+            "--bench-runs-file", str(runs_path.resolve()),
+        ]
 
-    print(f"  {name} ...", end="", flush=True)
-    result = subprocess.run(
-        cmd, capture_output=True, text=True,
-        cwd=ROOT / "tantivy-bench", stdin=subprocess.DEVNULL,
-    )
-    combined = result.stdout + result.stderr
+        print(f"  {name} ...", end="", flush=True)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            cwd=ROOT / "tantivy-bench", stdin=subprocess.DEVNULL,
+        )
+        combined = result.stdout + result.stderr
 
-    if result.returncode != 0:
-        print(" FAILED")
-        _print_subprocess_err(combined)
-        return None
+        if result.returncode != 0:
+            print(" FAILED")
+            _print_subprocess_err(combined)
+            return None
 
-    parsed = _parse_run_output(combined, name)
+        if debug:
+            _echo_captured_stdout(result)
+        parsed = _parse_run_output(combined, name, runs_path=runs_path)
+    finally:
+        runs_path.unlink(missing_ok=True)
+
     if parsed:
-        print(f"  {_fmt_ns(parsed.mean_ns)} mean  ({parsed.runs} runs, {parsed.lines:,} lines)")
+        print(
+            f"  {_fmt_ns(parsed.mean_ns)} mean  p50={_fmt_ns(parsed.p50_ns)}  "
+            f"95% CI [{_fmt_ns(parsed.ci_lo_ns)}, {_fmt_ns(parsed.ci_hi_ns)}]  "
+            f"99% CI [{_fmt_ns(parsed.ci99_lo_ns)}, {_fmt_ns(parsed.ci99_hi_ns)}]  "
+            f"({parsed.runs} runs, {parsed.lines:,} lines)"
+        )
     else:
         print(" PARSE ERROR")
         _print_subprocess_err(combined[:500])
@@ -239,7 +476,7 @@ def _build_iresearch() -> bool:
 
 
 def _run_iresearch(tokenizer: str, data: Path, count: int, warmup: int,
-                   reverse: bool = False) -> Optional[BenchResult]:
+                   reverse: bool = False, debug: bool = False) -> Optional[BenchResult]:
     name = f"BenchmarkIresearch/{tokenizer.capitalize()}"
 
     binary = _iresearch_binary()
@@ -249,30 +486,45 @@ def _run_iresearch(tokenizer: str, data: Path, count: int, warmup: int,
         return None
 
     irs_tokenizer = "path_hierarchy" if tokenizer == "path" else tokenizer
-    cmd = [
-        str(binary),
-        "--data", str(data),
-        "--tokenizer", irs_tokenizer,
-        "--runs", str(count),
-        "--warmup", str(warmup),
-    ]
-    if reverse and tokenizer == "path":
-        cmd.append("--reverse")
+    runs_path = _mk_runs_dump_path()
+    parsed: Optional[BenchResult] = None
+    combined = ""
+    try:
+        cmd = [
+            str(binary),
+            "--data", str(data),
+            "--tokenizer", irs_tokenizer,
+            "--runs", str(count),
+            "--warmup", str(warmup),
+            "--bench-runs-file", str(runs_path.resolve()),
+        ]
+        if reverse and tokenizer == "path":
+            cmd.append("--reverse")
 
-    print(f"  {name} ...", end="", flush=True)
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL
-    )
-    combined = result.stdout + result.stderr
+        print(f"  {name} ...", end="", flush=True)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL
+        )
+        combined = result.stdout + result.stderr
 
-    if result.returncode != 0:
-        print(" FAILED")
-        _print_subprocess_err(combined)
-        return None
+        if result.returncode != 0:
+            print(" FAILED")
+            _print_subprocess_err(combined)
+            return None
 
-    parsed = _parse_run_output(combined, name)
+        if debug:
+            _echo_captured_stdout(result)
+        parsed = _parse_run_output(combined, name, runs_path=runs_path)
+    finally:
+        runs_path.unlink(missing_ok=True)
+
     if parsed:
-        print(f"  {_fmt_ns(parsed.mean_ns)} mean  ({parsed.runs} runs, {parsed.lines:,} lines)")
+        print(
+            f"  {_fmt_ns(parsed.mean_ns)} mean  p50={_fmt_ns(parsed.p50_ns)}  "
+            f"95% CI [{_fmt_ns(parsed.ci_lo_ns)}, {_fmt_ns(parsed.ci_hi_ns)}]  "
+            f"99% CI [{_fmt_ns(parsed.ci99_lo_ns)}, {_fmt_ns(parsed.ci99_hi_ns)}]  "
+            f"({parsed.runs} runs, {parsed.lines:,} lines)"
+        )
     else:
         print(" PARSE ERROR")
         _print_subprocess_err(combined[:500])
@@ -337,6 +589,15 @@ def _print_subprocess_err(text: str) -> None:
         print(f"    {line}", file=sys.stderr)
 
 
+def _echo_captured_stdout(result: subprocess.CompletedProcess) -> None:
+    out = result.stdout
+    if not isinstance(out, str) or not out.strip():
+        return
+    print()
+    for line in out.splitlines():
+        print(f"    {line}")
+
+
 _GREEN = "\033[32m"
 _RED   = "\033[31m"
 _RESET = "\033[0m"
@@ -360,8 +621,14 @@ def _build_file_content(results: list[BenchResult], meta: str) -> str:
 def _print_results_table(results: list[BenchResult]) -> None:
     col = max(len(r.name) for r in results)
     has_tokens = any(r.tokens is not None for r in results)
-    tok_hdr = f"  {'tok/s':>10}" if has_tokens else ""
-    hdr = f"{'name':<{col}}  {'mean':>10}  {'p50':>10}  {'p95':>10}  {'p99':>10}  {'p100':>10}{tok_hdr}"
+    tok_hdr = f" {'tok/s':>8}" if has_tokens else ""
+    w = 9
+    ci95_w = 22
+    ci99_w = 22
+    hdr = (
+        f"{'name':<{col}} {'mean':>{w}} {'p50':>{w}} {'p95':>{w}} {'p99':>{w}} {'p100':>{w}}"
+        f" {'95%CI':^{ci95_w}} {'99%CI':^{ci99_w}}{tok_hdr}"
+    )
     sep = "─" * len(hdr)
     print(f"\n{sep}")
     print("RESULTS")
@@ -371,14 +638,18 @@ def _print_results_table(results: list[BenchResult]) -> None:
     for r in results:
         tok_col = ""
         if has_tokens:
-            tok_col = f"  {_fmt_tok_per_sec(r.tokens, r.mean_ns):>10}" if r.tokens else f"  {'--':>10}"
+            tok_col = f" {_fmt_tok_per_sec(r.tokens, r.mean_ns):>8}" if r.tokens else f" {'--':>8}"
+        ci95_txt = f"{_fmt_ns(r.ci_lo_ns)}..{_fmt_ns(r.ci_hi_ns)}"
+        ci99_txt = f"{_fmt_ns(r.ci99_lo_ns)}..{_fmt_ns(r.ci99_hi_ns)}"
         print(
             f"{r.name:<{col}}"
-            f"  {_fmt_ns(r.mean_ns):>10}"
-            f"  {_fmt_ns(r.p50_ns):>10}"
-            f"  {_fmt_ns(r.p95_ns):>10}"
-            f"  {_fmt_ns(r.p99_ns):>10}"
-            f"  {_fmt_ns(r.p100_ns):>10}"
+            f" {_fmt_ns(r.mean_ns):>{w}}"
+            f" {_fmt_ns(r.p50_ns):>{w}}"
+            f" {_fmt_ns(r.p95_ns):>{w}}"
+            f" {_fmt_ns(r.p99_ns):>{w}}"
+            f" {_fmt_ns(r.p100_ns):>{w}}"
+            f" {ci95_txt:^{ci95_w}}"
+            f" {ci99_txt:^{ci99_w}}"
             f"{tok_col}"
         )
     print(sep)
@@ -425,6 +696,11 @@ def _do_compare(old_path: str, new_path: str) -> None:
             _row(f"  p50", o.p50_ns, n.p50_ns)
             _row(f"  p95", o.p95_ns, n.p95_ns)
             _row(f"  p99", o.p99_ns, n.p99_ns)
+            _row(f"  p100", o.p100_ns, n.p100_ns)
+            _row(f"  ci95_lo", o.ci_lo_ns, n.ci_lo_ns)
+            _row(f"  ci95_hi", o.ci_hi_ns, n.ci_hi_ns)
+            _row(f"  ci99_lo", o.ci99_lo_ns, n.ci99_lo_ns)
+            _row(f"  ci99_hi", o.ci99_hi_ns, n.ci99_hi_ns)
         elif o:
             print(f"{name:<{col}}  {'--':>10}  {'(missing)':>10}")
         else:
@@ -460,8 +736,8 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
         help="Number of warmup runs (excluded from results). (default: 2)",
     )
     p.add_argument(
-        "--data", metavar="FILE", default="tantivy-bench/test_words.txt",
-        help="Path to input data file. (default: tantivy-bench/test_words.txt)",
+        "--data", metavar="FILE", default="test_words.txt",
+        help="Path to input data file. (default: test_words.txt in repo root)",
     )
     p.add_argument(
         "-o", metavar="FILE",
@@ -474,6 +750,11 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--reverse", action="store_true",
         help="Run path tokenizer in reverse mode (ReversePathHierarchyTokenizer). Tantivy is excluded.",
+    )
+    p.add_argument(
+        "--debug", action="store_true",
+        help="Echo native benchmark stdout after capture (tokenizer=…, time_ms/time_ns, checksum). "
+        "Default: stdout is only parsed, not printed.",
     )
 
 
@@ -540,12 +821,13 @@ examples:
     print(f"data:       {data}")
 
     reverse = getattr(args, "reverse", False)
+    debug = getattr(args, "debug", False)
 
     results: list[BenchResult] = []
     for tok in tokenizers:
         print(f"\n--- {tok} ---")
         for sys_name in systems:
-            r = _RUNNERS[sys_name](tok, data, args.count, args.warmup, reverse)
+            r = _RUNNERS[sys_name](tok, data, args.count, args.warmup, reverse, debug)
             if r:
                 results.append(r)
 

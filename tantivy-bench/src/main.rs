@@ -1,7 +1,7 @@
 use clap::{Parser, ValueEnum};
 use regex::Regex;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -46,6 +46,10 @@ struct Args {
     // Print every token to stdout and exit, skipping benchmark
     #[arg(long, default_value_t = false)]
     dump: bool,
+
+    /// Write per-run wall times (ns) as uint64
+    #[arg(long, value_name = "PATH")]
+    bench_runs_file: Option<PathBuf>,
 }
 
 fn load_lines(path: &PathBuf) -> Vec<String> {
@@ -131,19 +135,6 @@ fn process_lines_facet(tokenizer: &mut FacetTokenizer, lines: &[String]) -> (i64
     (h, count)
 }
 
-fn percentiles(latencies_ns: &mut [u64]) -> (u64, u64, u64, u64) {
-    latencies_ns.sort_unstable();
-    let n = latencies_ns.len();
-    if n == 0 {
-        return (0, 0, 0, 0);
-    }
-    let p50 = latencies_ns[(n as f64 * 0.50) as usize];
-    let p95 = latencies_ns[(n as f64 * 0.95) as usize];
-    let p99 = latencies_ns[(n as f64 * 0.99).min((n - 1) as f64) as usize];
-    let p100 = latencies_ns[n - 1];
-    (p50, p95, p99, p100)
-}
-
 fn main() {
     let args = Args::parse();
     let lines = load_lines(&args.data);
@@ -205,9 +196,12 @@ fn main() {
                 args.runs,
                 lines.len(),
                 token_count,
-                &mut latencies,
+                &latencies,
                 checksum,
             );
+            if let Some(ref p) = args.bench_runs_file {
+                write_bench_runs_file(p, &latencies);
+            }
         }
         TokenizerKind::Facet => {
             let mut tokenizer = FacetTokenizer::default();
@@ -248,9 +242,12 @@ fn main() {
                 args.runs,
                 lines.len(),
                 token_count,
-                &mut latencies,
+                &latencies,
                 checksum,
             );
+            if let Some(ref p) = args.bench_runs_file {
+                write_bench_runs_file(p, &latencies);
+            }
         }
     }
 }
@@ -260,10 +257,16 @@ fn print_results(
     runs: u32,
     line_count: usize,
     token_count: u64,
-    latencies: &mut [u64],
+    latencies: &[u64],
     checksum: i64,
 ) {
-    let (p50, p95, p99, p100) = percentiles(latencies);
+    let mut sorted = latencies.to_vec();
+    sorted.sort_unstable();
+    let n = sorted.len();
+    let p50 = sorted[(n as f64 * 0.50) as usize];
+    let p95 = sorted[(n as f64 * 0.95) as usize];
+    let p99 = sorted[(n as f64 * 0.99).min((n - 1) as f64) as usize];
+    let p100 = sorted[n - 1];
     let mean_ns: u64 = latencies.iter().sum::<u64>() / latencies.len() as u64;
 
     println!("tokenizer={tokenizer} runs={runs} lines={line_count} tokens={token_count}");
@@ -277,4 +280,12 @@ fn print_results(
     );
     println!("time_ns p50={p50} p95={p95} p99={p99} p100={p100} mean={mean_ns}");
     println!("checksum={checksum}");
+}
+
+fn write_bench_runs_file(path: &PathBuf, latencies: &[u64]) {
+    let mut f = File::create(path).expect("create --bench-runs-file");
+    for &v in latencies {
+        f.write_all(&v.to_le_bytes())
+            .expect("write per-run time to --bench-runs-file");
+    }
 }
