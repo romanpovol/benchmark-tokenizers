@@ -110,9 +110,16 @@ def _parse_result_file(path: str) -> dict[str, BenchResult]:
                 )
     return results
 
+def _bench_name_token(tokenizer: str) -> str:
+    return "".join(p.capitalize() for p in tokenizer.split("_"))
+
+
 def _run_lucene(tokenizer: str, data: Path, count: int, warmup: int,
                 reverse: bool = False) -> Optional[BenchResult]:
-    name = f"BenchmarkLucene/{tokenizer.capitalize()}"
+    name = f"BenchmarkLucene/{_bench_name_token(tokenizer)}"
+    if tokenizer not in {"pattern", "path"}:
+        print(f"  {name} ... UNSUPPORTED")
+        return None
     rev_flag = " --reverse" if reverse else ""
     args_str = f"{data} {tokenizer} --runs {count} --warmup {warmup}{rev_flag}"
     cmd = ["./gradlew", "run", "-q", f"--args={args_str}"]
@@ -139,11 +146,14 @@ def _run_lucene(tokenizer: str, data: Path, count: int, warmup: int,
 
 def _run_tantivy(tokenizer: str, data: Path, count: int, warmup: int,
                  reverse: bool = False) -> Optional[BenchResult]:
+    name = f"BenchmarkTantivy/{_bench_name_token(tokenizer)}"
     if reverse and tokenizer == "path":
         # Tantivy FacetTokenizer has no reverse mode
         return None
-    name = f"BenchmarkTantivy/{tokenizer.capitalize()}"
-    tantivy_type = {"pattern": "regex", "path": "facet"}[tokenizer]
+    tantivy_type = {"pattern": "regex", "path": "facet"}.get(tokenizer)
+    if tantivy_type is None:
+        print(f"  {name} ... UNSUPPORTED")
+        return None
     cmd = [
         "cargo", "run", "--release", "-q", "--",
         "--data", str(data),
@@ -240,7 +250,7 @@ def _build_iresearch() -> bool:
 
 def _run_iresearch(tokenizer: str, data: Path, count: int, warmup: int,
                    reverse: bool = False) -> Optional[BenchResult]:
-    name = f"BenchmarkIresearch/{tokenizer.capitalize()}"
+    name = f"BenchmarkIresearch/{_bench_name_token(tokenizer)}"
 
     binary = _iresearch_binary()
     if binary is None:
@@ -248,7 +258,15 @@ def _run_iresearch(tokenizer: str, data: Path, count: int, warmup: int,
               f"-DIRESEARCH_SRC=... && cmake --build iresearch-bench/build)")
         return None
 
-    irs_tokenizer = "path_hierarchy" if tokenizer == "path" else tokenizer
+    irs_tokenizer = {
+        "path": "path_hierarchy",
+        "pattern": "pattern",
+        "text": "text",
+        "pipeline": "pipeline",
+    }.get(tokenizer)
+    if irs_tokenizer is None:
+        print(f"  {name} ... UNSUPPORTED")
+        return None
     cmd = [
         str(binary),
         "--data", str(data),
@@ -296,9 +314,11 @@ def _check_checksums(results: list[BenchResult]) -> None:
     print()
     all_ok = True
     for tok, checksums in sorted(by_tok.items()):
-        if len(checksums) < 2:
-            continue  # only one system ran, nothing to compare
         label = f"checksum/{tok.capitalize()}"
+        if len(checksums) == 1:
+            sys_name, checksum = next(iter(checksums.items()))
+            print(f"  {label}  SINGLE  {sys_name}={checksum}")
+            continue
         values = list(checksums.values())
         all_match = all(v == values[0] for v in values)
         detail = "  ".join(f"{s}={c}" for s, c in sorted(checksums.items()))
@@ -432,7 +452,7 @@ def _do_compare(old_path: str, new_path: str) -> None:
 
     print(sep)
 
-_ALL_TOKENIZERS = ["pattern", "path"]
+_ALL_TOKENIZERS = ["pattern", "path", "text", "pipeline"]
 _ALL_SYSTEMS    = ["lucene", "tantivy", "iresearch"]
 
 
@@ -441,7 +461,8 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
         "--bench", metavar="REGEXP", default=".",
         help=(
             "Run benchmarks whose name matches REGEXP. "
-            "Use 'pattern', 'path', or '.' for all. (default: .)"
+            "Use 'pattern', 'path', 'text', 'pipeline', or '.' for all. "
+            "(default: .)"
         ),
     )
     p.add_argument(

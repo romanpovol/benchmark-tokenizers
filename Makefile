@@ -42,7 +42,7 @@ _PROF_TOKENIZER = $(if $(filter path,$(PROF_TOKENIZER)),path_hierarchy,$(PROF_TO
 _PROF_ARGS = --data $(DATA) --tokenizer $(_PROF_TOKENIZER) --runs $(PROF_COUNT) --warmup $(WARMUP) \
              $(if $(filter 1 true yes,$(REVERSE)),--reverse)
 
-.PHONY: help bench bench-pattern bench-path bench-lucene bench-tantivy bench-iresearch \
+.PHONY: help bench bench-pattern bench-path bench-text bench-pipeline bench-lucene bench-tantivy bench-iresearch \
         iresearch-build iresearch-build-prof profile-iresearch compare
 
 help:
@@ -52,6 +52,8 @@ help:
 	@printf "  %-20s %s\n" bench              "run all benchmarks"
 	@printf "  %-20s %s\n" bench-pattern      "run pattern/regex benchmarks only"
 	@printf "  %-20s %s\n" bench-path         "run path/facet benchmarks only"
+	@printf "  %-20s %s\n" bench-text         "run SereneDB text_tokenizer only"
+	@printf "  %-20s %s\n" bench-pipeline     "run SereneDB pipeline(text+norm+stop+stem+edge_ngram) only"
 	@printf "  %-20s %s\n" bench-lucene       "run Lucene benchmarks only"
 	@printf "  %-20s %s\n" bench-tantivy      "run Tantivy benchmarks only"
 	@printf "  %-20s %s\n" bench-iresearch 	  "run SereneDB benchmarks only"
@@ -83,6 +85,12 @@ bench-pattern:
 
 bench-path:
 	python3 bench.py --bench path $(_BASE)
+
+bench-text:
+	python3 bench.py --bench text $(_BASE)
+
+bench-pipeline:
+	python3 bench.py --bench pipeline $(_BASE)
 
 bench-lucene:
 	python3 bench.py --bench . --systems lucene \

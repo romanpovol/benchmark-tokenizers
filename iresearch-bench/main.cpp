@@ -8,6 +8,9 @@
 #include <string_view>
 #include <vector>
 
+#include <absl/strings/str_cat.h>
+
+#include "iresearch/analysis/analyzers.hpp"
 #include "iresearch/analysis/path_hierarchy_tokenizer.hpp"
 #include "iresearch/analysis/pattern_tokenizer.hpp"
 
@@ -72,9 +75,72 @@ Percentiles calc_percentiles(std::vector<uint64_t>& v) {
   };
 }
 
+std::string BuildPipelineConfig(bool pipe_no_stopwords, bool pipe_no_stem,
+                                bool pipe_no_edge) {
+  std::vector<std::string_view> steps;
+  steps.emplace_back(R"({
+    "type": "text",
+    "properties": {
+      "locale": "en_US.UTF-8",
+      "case": "none",
+      "accent": true,
+      "stemming": false,
+      "stopwords": []
+    }
+  })");
+  steps.emplace_back(R"({
+    "type": "norm",
+    "properties": {
+      "locale": "en_US.UTF-8",
+      "case": "lower",
+      "accent": false
+    }
+  })");
+  if (!pipe_no_stopwords) {
+    steps.emplace_back(R"({
+      "type": "stopwords",
+      "properties": {
+        "stopwords": [
+          "the","and","or","but","in","on","at","to","of","for",
+          "a","an","is","it","as","be","by","if","we"
+        ],
+        "hex": false
+      }
+    })");
+  }
+  if (!pipe_no_stem) {
+    steps.emplace_back(R"({
+      "type": "stem",
+      "properties": {
+        "locale": "en_US.UTF-8"
+      }
+    })");
+  }
+  if (!pipe_no_edge) {
+    steps.emplace_back(R"({
+      "type": "edge_ngram",
+      "properties": {
+        "min": 1,
+        "max": 3,
+        "preserveOriginal": false
+      }
+    })");
+  }
+
+  std::string config = R"({"pipeline":[)";
+  for (size_t i = 0; i < steps.size(); ++i) {
+    if (i != 0) {
+      config += ",";
+    }
+    config += steps[i];
+  }
+  config += "]}";
+  return config;
+}
+
 void usage() {
   std::cerr <<
-    "Usage: iresearch-bench --data FILE [--tokenizer pattern|path|path_hierarchy]\n"
+    "Usage: iresearch-bench --data FILE [--tokenizer pattern|path|path_hierarchy|text|pipeline]\n"
     "                       [--runs N] [--warmup N] [--dump]\n"
     "\n"
     "PatternTokenizer options (pattern / path):\n"
@@ -86,10 +152,20 @@ void usage() {
     "  --reverse             reverse mode for domain-like hierarchies\n"
     "  --skip N              skip first N tokens (default: 0)\n"
     "\n"
+    "Pipeline A/B options (only with --tokenizer pipeline):\n"
+    "  --pipe-no-stopwords   remove stopwords stage\n"
+    "  --pipe-no-stem        remove stem stage\n"
+    "  --pipe-no-edge        remove edge_ngram stage\n"
+    "\n"
+    "Text options (only with --tokenizer text):\n"
+    "  --text-no-stem        disable stemming in text tokenizer\n"
+    "\n"
     "Tokenizer modes:\n"
     "  pattern        group=0,  default regex \\w+  (match mode -- emits matches)\n"
     "  path           group=-1, default regex [/]+  (split mode -- emits segments)\n"
-    "  path_hierarchy PathHierarchyTokenizer, emits cumulative path prefixes\n";
+    "  path_hierarchy PathHierarchyTokenizer, emits cumulative path prefixes\n"
+    "  text           SereneDB full text_tokenizer (lower+stop+stem+edge_ngram)\n"
+    "  pipeline       PipelineTokenizer: text -> norm(lower) -> stopwords -> stem -> edge_ngram\n";
 }
 
 int main(int argc, char** argv) {
@@ -105,6 +181,10 @@ int main(int argc, char** argv) {
   std::string ph_replacement = "/";
   bool ph_reverse = false;
   int ph_skip = 0;
+  bool pipe_no_stopwords = false;
+  bool pipe_no_stem = false;
+  bool pipe_no_edge = false;
+  bool text_no_stem = false;
 
   for (int i = 1; i < argc; ++i) {
     std::string_view arg = argv[i];
@@ -135,6 +215,14 @@ int main(int argc, char** argv) {
       ph_reverse = true;
     } else if (arg == "--skip") {
       ph_skip = std::stoi(std::string(next_arg()));
+    } else if (arg == "--pipe-no-stopwords") {
+      pipe_no_stopwords = true;
+    } else if (arg == "--pipe-no-stem") {
+      pipe_no_stem = true;
+    } else if (arg == "--pipe-no-edge") {
+      pipe_no_edge = true;
+    } else if (arg == "--text-no-stem") {
+      text_no_stem = true;
     } else {
       std::cerr << "Unknown option: " << argv[i] << "\n";
       usage();
@@ -156,7 +244,46 @@ int main(int argc, char** argv) {
   std::unique_ptr<irs::analysis::Analyzer> tokenizer_owner;
   irs::analysis::Analyzer* tokenizer = nullptr;
 
-  if (tokenizer_kind == "path_hierarchy") {
+  if (tokenizer_kind == "text") {
+    irs::analysis::analyzers::Init();
+    static constexpr auto kJson = irs::Type<irs::text_format::Json>::get();
+    const std::string text_config = absl::StrCat(
+      R"({
+      "locale": "en_US.UTF-8",
+      "case": "lower",
+      "accent": false,
+      "stemming": )",
+      text_no_stem ? "false" : "true",
+      R"(,
+      "stopwords": [
+        "the","and","or","but","in","on","at","to","of","for",
+        "a","an","is","it","as","be","by","if","we"
+      ],
+      "edgeNGram": {
+        "min": 1,
+        "max": 3,
+        "preserveOriginal": false
+      }
+    })");
+    tokenizer_owner = irs::analysis::analyzers::Get("text", kJson, text_config);
+    if (!tokenizer_owner) {
+      std::cerr << "Failed to create text tokenizer\n";
+      return 1;
+    }
+    tokenizer = tokenizer_owner.get();
+  } else if (tokenizer_kind == "pipeline") {
+    irs::analysis::analyzers::Init();
+    static constexpr auto kJson = irs::Type<irs::text_format::Json>::get();
+    const std::string pipeline_config =
+      BuildPipelineConfig(pipe_no_stopwords, pipe_no_stem, pipe_no_edge);
+    tokenizer_owner =
+      irs::analysis::analyzers::Get("pipeline", kJson, pipeline_config);
+    if (!tokenizer_owner) {
+      std::cerr << "Failed to create pipeline tokenizer\n";
+      return 1;
+    }
+    tokenizer = tokenizer_owner.get();
+  } else if (tokenizer_kind == "path_hierarchy") {
     irs::analysis::PathHierarchyTokenizer::Options opts;
     opts.delimiter = ph_delimiter;
     opts.replacement = ph_replacement;
