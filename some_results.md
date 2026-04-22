@@ -88,44 +88,44 @@ Dataset: `sample_small.txt` (1,000 lines)
 
 ```
 ❯ make bench-pipeline SYSTEMS=iresearch IRESEARCH_SRC=../serenedb DATA=sample_small.txt
-python3 bench.py --bench pipeline --systems iresearch --count 10 --warmup 2 --data sample_small.txt   
+python3 bench.py --bench pipeline --systems iresearch --count 10 --warmup 2 --data sample_small.txt    
 tokenizers: pipeline
 systems:    iresearch
 count:      10  warmup: 2
 data:       /home/romanp/benchmark-tokenizers/sample_small.txt
 
 --- pipeline ---
-  BenchmarkIresearch/Pipeline ...  4.511s mean  (10 runs, 1,000 lines)
+  BenchmarkIresearch/Pipeline ...  4.601s mean  p50=4.588s  95% CI [4.579s, 4.635s]  99% CI [4.576s, 4.650s]  (10 runs, 1,000 lines)
 
-───────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 RESULTS
-───────────────────────────────────────────────────────────────────────────────────────────────────
-name                               mean         p50         p95         p99        p100       tok/s
-───────────────────────────────────────────────────────────────────────────────────────────────────
-BenchmarkIresearch/Pipeline      4.511s      4.505s      4.535s      4.535s      4.535s       1.42M
-───────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+name                             mean       p50       p95       p99      p100         95%CI                  99%CI             tok/s
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+BenchmarkIresearch/Pipeline    4.601s    4.588s    4.738s    4.738s    4.738s     4.579s..4.635s         4.576s..4.650s        1.40M
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   checksum/Pipeline  SINGLE  iresearch=-274087441542650178
 ```
 
 ```
 ❯ make bench-text SYSTEMS=iresearch IRESEARCH_SRC=../serenedb DATA=sample_small.txt
-python3 bench.py --bench text --systems iresearch --count 10 --warmup 2 --data sample_small.txt   
+python3 bench.py --bench text --systems iresearch --count 10 --warmup 2 --data sample_small.txt    
 tokenizers: text
 systems:    iresearch
 count:      10  warmup: 2
 data:       /home/romanp/benchmark-tokenizers/sample_small.txt
 
 --- text ---
-  BenchmarkIresearch/Text ...  4.019s mean  (10 runs, 1,000 lines)
+  BenchmarkIresearch/Text ...  4.103s mean  p50=4.084s  95% CI [4.073s, 4.138s]  99% CI [4.066s, 4.150s]  (10 runs, 1,000 lines)
 
-───────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 RESULTS
-───────────────────────────────────────────────────────────────────────────────────────────────
-name                           mean         p50         p95         p99        p100       tok/s
-───────────────────────────────────────────────────────────────────────────────────────────────
-BenchmarkIresearch/Text      4.019s      4.016s      4.037s      4.037s      4.037s       1.60M
-───────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+name                         mean       p50       p95       p99      p100         95%CI                  99%CI             tok/s
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+BenchmarkIresearch/Text    4.103s    4.084s    4.211s    4.211s    4.211s     4.073s..4.138s         4.066s..4.150s        1.57M
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   checksum/Text  SINGLE  iresearch=-274087441542650178
 ```
@@ -147,43 +147,22 @@ Added in-memory cache in `StemmingTokenizer` (`token -> stem`, 16384 entries wit
 
 ```
 ❯ make bench-pipeline SYSTEMS=iresearch IRESEARCH_SRC=../serenedb DATA=sample_small.txt
-python3 bench.py --bench pipeline --systems iresearch --count 10 --warmup 2 --data sample_small.txt   
+python3 bench.py --bench pipeline --systems iresearch --count 10 --warmup 2 --data sample_small.txt    
 tokenizers: pipeline
 systems:    iresearch
 count:      10  warmup: 2
 data:       /home/romanp/benchmark-tokenizers/sample_small.txt
 
 --- pipeline ---
-  BenchmarkIresearch/Pipeline ...  3.667s mean  (10 runs, 1,000 lines)
+  BenchmarkIresearch/Pipeline ...  3.673s mean  p50=3.672s  95% CI [3.667s, 3.679s]  99% CI [3.666s, 3.681s]  (10 runs, 1,000 lines)
 
-───────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 RESULTS
-───────────────────────────────────────────────────────────────────────────────────────────────────
-name                               mean         p50         p95         p99        p100       tok/s
-───────────────────────────────────────────────────────────────────────────────────────────────────
-BenchmarkIresearch/Pipeline      3.667s      3.667s      3.683s      3.683s      3.683s       1.75M
-───────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+name                             mean       p50       p95       p99      p100         95%CI                  99%CI             tok/s
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+BenchmarkIresearch/Pipeline    3.673s    3.672s    3.692s    3.692s    3.692s     3.667s..3.679s         3.666s..3.681s        1.75M
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
   checksum/Pipeline  SINGLE  iresearch=-274087441542650178
-```
-
-```
-❯ make bench-text SYSTEMS=iresearch IRESEARCH_SRC=../serenedb DATA=sample_small.txt
-python3 bench.py --bench text --systems iresearch --count 10 --warmup 2 --data sample_small.txt   
-tokenizers: text
-systems:    iresearch
-count:      10  warmup: 2
-data:       /home/romanp/benchmark-tokenizers/sample_small.txt
-
---- text ---
-  BenchmarkIresearch/Text ...  4.033s mean  (10 runs, 1,000 lines)
-
-───────────────────────────────────────────────────────────────────────────────────────────────
-RESULTS
-───────────────────────────────────────────────────────────────────────────────────────────────
-name                           mean         p50         p95         p99        p100       tok/s
-───────────────────────────────────────────────────────────────────────────────────────────────
-BenchmarkIresearch/Text      4.033s      4.032s      4.080s      4.080s      4.080s       1.59M
-───────────────────────────────────────────────────────────────────────────────────────────────
-
-  checksum/Text  SINGLE  iresearch=-274087441542650178
 ```
