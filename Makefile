@@ -1,10 +1,11 @@
-DATA    ?= tantivy-bench/test_words.txt
+DATA    ?= test_words.txt
 COUNT   ?= 10
 WARMUP  ?= 2
 SYSTEMS ?= all
 # OUTPUT  -- set to save results, e.g.  make bench OUTPUT=results/run1.txt
 # COMPARE -- set to compare against a previous run, e.g. COMPARE=results/run1.txt
 # REVERSE -- set to 1 to use reverse path hierarchy, e.g. make bench-path REVERSE=1
+# DEBUG   -- set to 1 to pass --debug to bench.py (echo native stdout: tokenizer/time_ns/checksum)
 
 # Profiling options (used by profile-iresearch)
 #   PROF_TOKENIZER -- tokenizer to profile: pattern or path (default: pattern)
@@ -19,8 +20,9 @@ PROF_OUT       ?= profile
 _OUTPUT_ARG  = $(if $(OUTPUT),-o $(OUTPUT))
 _COMPARE_ARG = $(if $(COMPARE),--compare $(COMPARE))
 _REVERSE_ARG = $(if $(filter 1 true yes,$(REVERSE)),--reverse)
+_DEBUG_ARG   = $(if $(filter 1 true yes,$(DEBUG)),--debug)
 _BASE        = --systems $(SYSTEMS) --count $(COUNT) --warmup $(WARMUP) \
-               --data $(DATA) $(_OUTPUT_ARG) $(_COMPARE_ARG) $(_REVERSE_ARG)
+               --data $(DATA) $(_OUTPUT_ARG) $(_COMPARE_ARG) $(_REVERSE_ARG) $(_DEBUG_ARG)
 
 # Path to cloned iresearch/serenedb repo
 # export IRESEARCH_SRC=/path/to/serenedb
@@ -69,7 +71,8 @@ help:
 	@printf "  %-18s %s\n" "SYSTEMS=<list>" "lucene, tantivy, SereneDB, or all (default: $(SYSTEMS))"
 	@printf "  %-18s %s\n" "OUTPUT=<file>"  "save results to file"
 	@printf "  %-18s %s\n" "COMPARE=<file>" "compare against a previous OUTPUT file"
-	@printf "  %-18s %s\n" "REVERSE=1"         "reverse path hierarchy mode (path tokenizer only, no Tantivy)"
+	@printf "  %-18s %s\n" "REVERSE=1"      "reverse path hierarchy mode (path tokenizer only, no Tantivy)"
+	@printf "  %-18s %s\n" "DEBUG=1"        "echo native stdout via bench.py --debug (off by default)"
 	@echo ""
 	@echo "Profiling variables (profile-SereneDB):"
 	@printf "  %-18s %s\n" "PROF_TOKENIZER="  "pattern or path (default: $(PROF_TOKENIZER))"
@@ -94,15 +97,15 @@ bench-pipeline:
 
 bench-lucene:
 	python3 bench.py --bench . --systems lucene \
-	  --count $(COUNT) --warmup $(WARMUP) --data $(DATA) $(_OUTPUT_ARG) $(_COMPARE_ARG)
+	  --count $(COUNT) --warmup $(WARMUP) --data $(DATA) $(_OUTPUT_ARG) $(_COMPARE_ARG) $(_DEBUG_ARG)
 
 bench-tantivy:
 	python3 bench.py --bench . --systems tantivy \
-	  --count $(COUNT) --warmup $(WARMUP) --data $(DATA) $(_OUTPUT_ARG) $(_COMPARE_ARG)
+	  --count $(COUNT) --warmup $(WARMUP) --data $(DATA) $(_OUTPUT_ARG) $(_COMPARE_ARG) $(_DEBUG_ARG)
 
 bench-iresearch:
 	python3 bench.py --bench . --systems iresearch \
-	  --count $(COUNT) --warmup $(WARMUP) --data $(DATA) $(_OUTPUT_ARG) $(_COMPARE_ARG)
+	  --count $(COUNT) --warmup $(WARMUP) --data $(DATA) $(_OUTPUT_ARG) $(_COMPARE_ARG) $(_DEBUG_ARG)
 
 iresearch-build:
 	@test -n "$(IRESEARCH_SRC)" || { \

@@ -4,26 +4,26 @@
 
 ```
 ❯ make bench-path DATA=data/paths.txt SYSTEMS=all
-python3 bench.py --bench path --systems all --count 10 --warmup 2 --data data/paths.txt   
+python3 bench.py --bench path --systems all --count 10 --warmup 2 --data data/paths.txt    
 tokenizers: path
 systems:    lucene, tantivy, iresearch
 count:      10  warmup: 2
 data:       /home/romanp/benchmark-tokenizers/data/paths.txt
 
 --- path ---
-  BenchmarkLucene/Path ...  121.276ms mean  (10 runs, 100,000 lines)
-  BenchmarkTantivy/Path ...  59.429ms mean  (10 runs, 100,000 lines)
-  BenchmarkIresearch/Path ...  25.650ms mean  (10 runs, 100,000 lines)
+  BenchmarkLucene/Path ...  111.197ms mean  p50=105.982ms  95% CI [104.933ms, 119.518ms]  99% CI [104.399ms, 122.428ms]  (10 runs, 100,000 lines)
+  BenchmarkTantivy/Path ...  57.670ms mean  p50=57.639ms  95% CI [57.464ms, 57.910ms]  99% CI [57.420ms, 57.988ms]  (10 runs, 100,000 lines)
+  BenchmarkIresearch/Path ...  22.224ms mean  p50=22.229ms  95% CI [22.184ms, 22.265ms]  99% CI [22.174ms, 22.275ms]  (10 runs, 100,000 lines)
 
-───────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 RESULTS
-───────────────────────────────────────────────────────────────────────────────────────────────
-name                           mean         p50         p95         p99        p100       tok/s
-───────────────────────────────────────────────────────────────────────────────────────────────
-BenchmarkLucene/Path      121.276ms   111.099ms   153.032ms   153.032ms   153.032ms       5.29M
-BenchmarkTantivy/Path      59.429ms    59.607ms    61.303ms    61.303ms    61.303ms      10.80M
-BenchmarkIresearch/Path    25.650ms    25.709ms    26.521ms    26.521ms    26.521ms      25.02M
-───────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+name                         mean       p50       p95       p99      p100         95%CI                  99%CI             tok/s
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+BenchmarkLucene/Path    111.197ms 105.982ms 139.957ms 139.957ms 139.957ms  104.933ms..119.518ms   104.399ms..122.428ms     5.77M
+BenchmarkTantivy/Path    57.670ms  57.639ms  58.501ms  58.501ms  58.501ms   57.464ms..57.910ms     57.420ms..57.988ms     11.13M
+BenchmarkIresearch/Path  22.224ms  22.229ms  22.315ms  22.315ms  22.315ms   22.184ms..22.265ms     22.174ms..22.275ms     28.87M
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   checksum/Path  OK  iresearch=-8411998038007610440  lucene=-8411998038007610440  tantivy=-8411998038007610440
 ```
@@ -32,24 +32,24 @@ BenchmarkIresearch/Path    25.650ms    25.709ms    26.521ms    26.521ms    26.52
 
 ```
 ❯ make bench-path REVERSE=1 DATA=data/paths.txt SYSTEMS=lucene,iresearch
-python3 bench.py --bench path --systems lucene,iresearch --count 10 --warmup 2 --data data/paths.txt   --reverse
+python3 bench.py --bench path --systems lucene,iresearch --count 10 --warmup 2 --data data/paths.txt   --reverse 
 tokenizers: path
 systems:    lucene, iresearch
 count:      10  warmup: 2
 data:       /home/romanp/benchmark-tokenizers/data/paths.txt
 
 --- path ---
-  BenchmarkLucene/Path ...  135.802ms mean  (10 runs, 100,000 lines)
-  BenchmarkIresearch/Path ...  27.694ms mean  (10 runs, 100,000 lines)
+  BenchmarkLucene/Path ...  118.222ms mean  p50=111.889ms  95% CI [111.827ms, 126.702ms]  99% CI [110.417ms, 129.688ms]  (10 runs, 100,000 lines)
+  BenchmarkIresearch/Path ...  24.799ms mean  p50=24.786ms  95% CI [24.677ms, 24.929ms]  99% CI [24.643ms, 24.968ms]  (10 runs, 100,000 lines)
 
-───────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 RESULTS
-───────────────────────────────────────────────────────────────────────────────────────────────
-name                           mean         p50         p95         p99        p100       tok/s
-───────────────────────────────────────────────────────────────────────────────────────────────
-BenchmarkLucene/Path      135.802ms   132.049ms   175.462ms   175.462ms   175.462ms       5.46M
-BenchmarkIresearch/Path    27.694ms    27.676ms    28.562ms    28.562ms    28.562ms      26.78M
-───────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+name                         mean       p50       p95       p99      p100         95%CI                  99%CI             tok/s
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+BenchmarkLucene/Path    118.222ms 111.889ms 146.696ms 146.696ms 146.696ms  111.827ms..126.702ms   110.417ms..129.688ms     6.27M
+BenchmarkIresearch/Path  24.799ms  24.786ms  25.189ms  25.189ms  25.189ms   24.677ms..24.929ms     24.643ms..24.968ms     29.91M
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   checksum/Path  OK  iresearch=-1515999624014964263  lucene=-1515999624014964263
 ```
