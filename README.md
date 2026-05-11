@@ -8,8 +8,12 @@ Each timed run records one wall-clock duration in `--bench-runs-file` as uint64 
 stdout for per-run or summary timing fields to build the same table.
 
 Supported tokenizers:
-- `pattern` - regex-based word tokenizer (`\w+`)
-- `path` - path hierarchy tokenizer (emits cumulative prefixes: `/a`, `/a/b`, `/a/b/c`)
+- `pattern` -- regex-based word tokenizer (`\w+`)
+- `path` -- path hierarchy tokenizer (emits cumulative prefixes: `/a`, `/a/b`, `/a/b/c`)
+- `text` -- SereneDB full `text_tokenizer` (lowercase + stopwords + stemming + edgeNGram(min=1,max=3))
+- `pipeline` -- SereneDB pipeline (text -> norm(lower) -> stopwords -> stem -> edge_ngram(min=1,max=3))
+
+> Benchmarks for `text` and `pipeline` available in SereneDB only
 
 ## Output from `bench.py`
 
@@ -137,6 +141,8 @@ make bench DATA=test_words.txt
 make bench                           run all tokenizers × all systems
 make bench-pattern                   pattern/regex tokenizer only
 make bench-path                      path hierarchy tokenizer only
+make bench-text                      SereneDB text_tokenizer only
+make bench-pipeline                  SereneDB pipeline(text+norm+stop+stem+edge_ngram) only
 make bench-lucene                    Lucene only
 make bench-tantivy                   Tantivy only
 make bench-iresearch                 iresearch only
@@ -172,6 +178,12 @@ make bench-pattern COUNT=20 DATA=data/wiki.txt
 
 # Path hierarchy, iresearch only
 make bench-path SYSTEMS=iresearch DATA=data/paths.txt IRESEARCH_SRC=../serenedb
+
+# SereneDB text_tokenizer only
+make bench-text SYSTEMS=iresearch DATA=data/wiki_work/wiki_lines.txt
+
+# SereneDB pipeline(text+norm+stop+stem+edge_ngram) only
+make bench-pipeline SYSTEMS=iresearch DATA=data/wiki_work/wiki_lines.txt
 
 # Reverse path hierarchy (domain hierarchies), Lucene + iresearch
 make bench-path REVERSE=1 SYSTEMS=lucene,iresearch DATA=data/paths.txt
